@@ -94,9 +94,6 @@ fn build_codebook_trie() -> Vec<([u16;113],u8)> {
     let mut codebook_trie : Vec<([u16;113],u8)> = Vec::new();
     codebook_trie.push(([0;113],255));
     for i in 0..254 {
-        eprintln!("{}", CODEBOOK[i]);
-        eprintln!("{:?}", codebook_trie);
-        eprintln!("");
         let mut row = 0;
         let s = CODEBOOK[i].as_bytes();
         for j in 0..(s.len() - 1) {
