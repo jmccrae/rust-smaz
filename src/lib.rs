@@ -84,6 +84,70 @@ pub static CODEBOOK: [&str; 254] = [
     "whi", " ma", "ge", "x", "e c", "men", ".com",
 ];
 
+/// Build the codebook trie. The codebook trie consists of a
+/// [u16] vector indexed by characters code points 10..123 
+/// that indicate the next entry in trie. A value with the
+/// first bit indicates a terminal node with a value or the 
+/// terminal node is indicated by the u8 of the current entry.
+/// 255 is used to indicate no value at this node.
+fn build_codebook_trie() -> Vec<([u16;113],u8)> {
+    let mut codebook_trie : Vec<([u16;113],u8)> = Vec::new();
+    codebook_trie.push(([0;113],255));
+    for i in 0..254 {
+        eprintln!("{}", CODEBOOK[i]);
+        eprintln!("{:?}", codebook_trie);
+        eprintln!("");
+        let mut row = 0;
+        let s = CODEBOOK[i].as_bytes();
+        for j in 0..(s.len() - 1) {
+            if codebook_trie[row].0[(s[j] - 10) as usize] == 0 {
+                codebook_trie[row].0[(s[j] - 10) as usize] = codebook_trie.len() as u16;
+                row = codebook_trie.len();
+                codebook_trie.push(([0;113],255));
+            } else if codebook_trie[row].0[(s[j] - 10) as usize] & 0x8000 != 0 {
+                let index = (codebook_trie[row].0[(s[j] - 10) as usize] & 0x00ff) as u8;
+                codebook_trie[row].0[(s[j] - 10) as usize] = codebook_trie.len() as u16;
+                row = codebook_trie.len();
+                codebook_trie.push(([0;113],index));
+            } else {
+                row = codebook_trie[row].0[(s[j] - 10) as usize] as usize;
+            }
+        }
+        if codebook_trie[row].0[(s[s.len() - 1] - 10) as usize] == 0 {
+            codebook_trie[row].0[(s[s.len() - 1] - 10) as usize] = 0x8000 | i as u16;
+        } else  {
+            row = codebook_trie[row].0[(s[s.len() - 1] - 10) as usize] as usize;
+            codebook_trie[row].1 = i as u8;
+        }
+    }
+    codebook_trie
+}
+
+/// Advance the trie by one character. Returns the next row and the code.
+///
+/// # Arguments
+/// * `row` - The current row in the trie.
+/// * `char` - The next character to advance the trie.
+///
+/// # Returns
+/// A tuple of the next row and the code. If the row is zero then there is no
+/// valid code for any string that starts with the given character. If the 
+/// code is 255 then the string is not a terminal node in the trie.
+fn codebook_trie_next_char(row : usize, char : u8) -> (usize, u8) {
+    if char < 10 || char > 122 {
+        return (0, 255);
+    }
+    if CODEBOOK_TRIE[row].0[(char - 10) as usize] == 0 {
+        (0, 255)
+    } else if CODEBOOK_TRIE[row].0[(char - 10) as usize] & 0x8000 != 0 {
+        (0, (CODEBOOK_TRIE[row].0[(char - 10) as usize] & 0x00ff) as u8)
+    } else {
+        let row = CODEBOOK_TRIE[row].0[(char - 10) as usize] as usize;
+        (row, CODEBOOK_TRIE[row].1)
+    }
+}
+
+
 lazy_static! {
     static ref CODEBOOK_MAP: HashMap<Vec<u8>, u8> = {
         let mut map: HashMap<Vec<u8>, u8> = HashMap::new();
@@ -92,6 +156,10 @@ lazy_static! {
         }
         map
     };
+}
+
+lazy_static! {
+    static ref CODEBOOK_TRIE : Vec<([u16;113],u8)> = build_codebook_trie();
 }
 
 /// The error type for decompress operation.
@@ -152,18 +220,28 @@ pub fn compress(input: &[u8]) -> Vec<u8> {
             max_len = input.len() - input_index
         }
 
-        for i in (0..=max_len).rev() {
-            let code = CODEBOOK_MAP.get(&input[input_index..input_index + i]);
-            if let Some(v) = code {
-                if !verbatim.is_empty() {
-                    out.append(&mut flush_verbatim(&verbatim));
-                    verbatim.clear();
-                }
-                out.push(*v);
-                input_index += i;
-                encoded = true;
+        let mut row = 0;
+        let mut best_i = 0;
+        let mut best_code = 0;
+        for b in 0..max_len {
+            let (new_row, code) = codebook_trie_next_char(row, input[input_index + b]);
+            if code != 255 {
+                best_i = b + 1;
+                best_code = code;
+            }
+            row = new_row;
+            if row == 0 {
                 break;
             }
+        }
+        if best_i > 0 {
+            if !verbatim.is_empty() {
+                out.append(&mut flush_verbatim(&verbatim));
+                verbatim.clear();
+            }
+            out.push(best_code);
+            input_index += best_i;
+            encoded = true;
         }
 
         if !encoded {
@@ -273,4 +351,31 @@ mod tests {
             }
         }
     }
+
+    fn codebook_map_get(s : &str) -> Option<u8> {
+        let mut row = 0;
+        let s = s.as_bytes();
+        for b in 0..(s.len() - 1) {
+            let (new_row, _) = codebook_trie_next_char(row, s[b]);
+            if new_row == 0 {
+                return None;
+            }
+            row = new_row;
+        }
+        let (_, new_code) = codebook_trie_next_char(row, s[s.len() - 1]);
+        if new_code == 255 {
+            None
+        } else {
+            Some(new_code)
+        }
+    }
+
+    #[test]
+    fn test_codebook_map_get() {
+        for i in 0..254 {
+            assert_eq!(Some(i as u8), codebook_map_get(CODEBOOK[i]));
+        }
+        assert_eq!(None, codebook_map_get("foobar"));
+    }
+
 }
