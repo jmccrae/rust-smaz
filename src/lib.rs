@@ -109,11 +109,7 @@ impl fmt::Display for DecompressError {
     }
 }
 
-impl Error for DecompressError {
-    fn description(&self) -> &str {
-        "invalid compressed data"
-    }
-}
+impl Error for DecompressError {}
 
 /// A specialized Result type for decompress operation.
 pub type Result<T> = result::Result<T, DecompressError>;
@@ -210,13 +206,13 @@ pub fn decompress(input: &[u8]) -> Result<Vec<u8>> {
 
     while i < input.len() {
         if input[i] == 254 {
-            if i + 1 > input.len() {
+            if i + 1 >= input.len() {
                 return Err(DecompressError);
             }
             out.push(input[i + 1]);
             i += 2;
         } else if input[i] == 255 {
-            if i + input[i + 1] as usize + 2 >= input.len() {
+            if i + 2 + input[i + 1] as usize > input.len() {
                 return Err(DecompressError);
             }
             for j in 0..=input[i + 1] {

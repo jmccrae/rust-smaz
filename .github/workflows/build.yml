@@ -8,7 +8,7 @@ on: # yamllint disable-line rule:truthy
       - main
 
 jobs:
-  check:
+  tests:
     runs-on: ubuntu-latest
 
     steps:
