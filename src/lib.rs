@@ -146,17 +146,17 @@ fn build_codebook_trie() -> Vec<TrieNode> {
 /// A tuple of the next row and the code. If the row is zero then no
 /// codebook entry continues past this byte. If the code is 255 then the
 /// bytes read so far are not a complete codebook entry.
-fn codebook_trie_next_char(row: usize, byte: u8) -> (usize, u8) {
+fn codebook_trie_next_char(trie: &[TrieNode], row: usize, byte: u8) -> (usize, u8) {
     if !(TRIE_MIN_BYTE..=TRIE_MAX_BYTE).contains(&byte) {
         return (0, 255);
     }
-    let next = CODEBOOK_TRIE[row].0[(byte - TRIE_MIN_BYTE) as usize];
+    let next = trie[row].0[(byte - TRIE_MIN_BYTE) as usize];
     if next == 0 {
         (0, 255)
     } else if next & TRIE_TERMINAL != 0 {
         (0, (next & 0x00ff) as u8)
     } else {
-        (next as usize, CODEBOOK_TRIE[next as usize].1)
+        (next as usize, trie[next as usize].1)
     }
 }
 
@@ -207,6 +207,7 @@ fn flush_verbatim(verbatim: &[u8]) -> Vec<u8> {
 /// assert_eq!(vec![77, 114, 84], compressed);
 /// ```
 pub fn compress(input: &[u8]) -> Vec<u8> {
+    let trie: &[TrieNode] = &CODEBOOK_TRIE;
     let mut out: Vec<u8> = Vec::with_capacity(input.len() / 2);
     let mut verbatim: Vec<u8> = Vec::new();
     let mut input_index = 0;
@@ -222,7 +223,7 @@ pub fn compress(input: &[u8]) -> Vec<u8> {
         let mut best_i = 0;
         let mut best_code = 0;
         for b in 0..max_len {
-            let (new_row, code) = codebook_trie_next_char(row, input[input_index + b]);
+            let (new_row, code) = codebook_trie_next_char(trie, row, input[input_index + b]);
             if code != 255 {
                 best_i = b + 1;
                 best_code = code;
@@ -354,13 +355,13 @@ mod tests {
         let mut row = 0;
         let s = s.as_bytes();
         for &b in &s[..s.len() - 1] {
-            let (new_row, _) = codebook_trie_next_char(row, b);
+            let (new_row, _) = codebook_trie_next_char(&CODEBOOK_TRIE, row, b);
             if new_row == 0 {
                 return None;
             }
             row = new_row;
         }
-        let (_, new_code) = codebook_trie_next_char(row, s[s.len() - 1]);
+        let (_, new_code) = codebook_trie_next_char(&CODEBOOK_TRIE, row, s[s.len() - 1]);
         if new_code == 255 {
             None
         } else {
