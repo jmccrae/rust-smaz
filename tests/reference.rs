@@ -2,7 +2,7 @@
 //! the original hash-map implementation (smaz 0.1.0 on crates.io), so data
 //! compressed by either can be read by the other.
 
-use smaz::{compress, CODEBOOK};
+use smaz::{CODEBOOK, compress};
 use smaz_reference::compress as reference_compress;
 
 struct Lcg(u64);

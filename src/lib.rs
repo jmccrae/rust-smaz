@@ -59,7 +59,6 @@
 #[macro_use]
 extern crate lazy_static;
 
-use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::result;
@@ -87,79 +86,82 @@ pub static CODEBOOK: [&str; 254] = [
     "whi", " ma", "ge", "x", "e c", "men", ".com",
 ];
 
-/// Build the codebook trie. The codebook trie consists of a
-/// [u16] vector indexed by characters code points 10..123 
-/// that indicate the next entry in trie. A value with the
-/// first bit indicates a terminal node with a value or the 
-/// terminal node is indicated by the u8 of the current entry.
-/// 255 is used to indicate no value at this node.
-fn build_codebook_trie() -> Vec<([u16;113],u8)> {
-    let mut codebook_trie : Vec<([u16;113],u8)> = Vec::new();
-    codebook_trie.push(([0;113],255));
-    for i in 0..254 {
+/// The lowest and highest bytes that appear in the codebook. Each trie node
+/// has one slot per byte in this range.
+const TRIE_MIN_BYTE: u8 = 10;
+const TRIE_MAX_BYTE: u8 = 122;
+const TRIE_WIDTH: usize = (TRIE_MAX_BYTE - TRIE_MIN_BYTE + 1) as usize;
+
+/// Marks a slot as a terminal node; the low byte holds the codebook index.
+const TRIE_TERMINAL: u16 = 0x8000;
+
+/// A trie node: the next row for each byte in the codebook range, and the
+/// codebook index of the string ending at this node (255 if none).
+type TrieNode = ([u16; TRIE_WIDTH], u8);
+
+/// Build the codebook trie. Row 0 is the root. A slot is 0 if no codebook
+/// entry continues with that byte, `TRIE_TERMINAL | index` if a codebook
+/// entry ends there and none continue, and otherwise the row of the next
+/// node.
+fn build_codebook_trie() -> Vec<TrieNode> {
+    let mut codebook_trie: Vec<TrieNode> = vec![([0; TRIE_WIDTH], 255)];
+    for (i, entry) in CODEBOOK.iter().enumerate() {
         let mut row = 0;
-        let s = CODEBOOK[i].as_bytes();
-        for j in 0..(s.len() - 1) {
-            if codebook_trie[row].0[(s[j] - 10) as usize] == 0 {
-                codebook_trie[row].0[(s[j] - 10) as usize] = codebook_trie.len() as u16;
+        let s = entry.as_bytes();
+        for &b in &s[..s.len() - 1] {
+            let slot = (b - TRIE_MIN_BYTE) as usize;
+            if codebook_trie[row].0[slot] == 0 {
+                codebook_trie[row].0[slot] = codebook_trie.len() as u16;
                 row = codebook_trie.len();
-                codebook_trie.push(([0;113],255));
-            } else if codebook_trie[row].0[(s[j] - 10) as usize] & 0x8000 != 0 {
-                let index = (codebook_trie[row].0[(s[j] - 10) as usize] & 0x00ff) as u8;
-                codebook_trie[row].0[(s[j] - 10) as usize] = codebook_trie.len() as u16;
+                codebook_trie.push(([0; TRIE_WIDTH], 255));
+            } else if codebook_trie[row].0[slot] & TRIE_TERMINAL != 0 {
+                // A shorter entry ended here; turn it into a node that keeps
+                // its index
+                let index = (codebook_trie[row].0[slot] & 0x00ff) as u8;
+                codebook_trie[row].0[slot] = codebook_trie.len() as u16;
                 row = codebook_trie.len();
-                codebook_trie.push(([0;113],index));
+                codebook_trie.push(([0; TRIE_WIDTH], index));
             } else {
-                row = codebook_trie[row].0[(s[j] - 10) as usize] as usize;
+                row = codebook_trie[row].0[slot] as usize;
             }
         }
-        if codebook_trie[row].0[(s[s.len() - 1] - 10) as usize] == 0 {
-            codebook_trie[row].0[(s[s.len() - 1] - 10) as usize] = 0x8000 | i as u16;
-        } else  {
-            row = codebook_trie[row].0[(s[s.len() - 1] - 10) as usize] as usize;
+        let slot = (s[s.len() - 1] - TRIE_MIN_BYTE) as usize;
+        if codebook_trie[row].0[slot] == 0 {
+            codebook_trie[row].0[slot] = TRIE_TERMINAL | i as u16;
+        } else {
+            row = codebook_trie[row].0[slot] as usize;
             codebook_trie[row].1 = i as u8;
         }
     }
     codebook_trie
 }
 
-/// Advance the trie by one character. Returns the next row and the code.
+/// Advance the trie by one byte.
 ///
 /// # Arguments
 /// * `row` - The current row in the trie.
-/// * `char` - The next character to advance the trie.
+/// * `byte` - The next byte of the input.
 ///
 /// # Returns
-/// A tuple of the next row and the code. If the row is zero then there is no
-/// valid code for any string that starts with the given character. If the 
-/// code is 255 then the string is not a terminal node in the trie.
-fn codebook_trie_next_char(row : usize, char : u8) -> (usize, u8) {
-    if char < 10 || char > 122 {
+/// A tuple of the next row and the code. If the row is zero then no
+/// codebook entry continues past this byte. If the code is 255 then the
+/// bytes read so far are not a complete codebook entry.
+fn codebook_trie_next_char(trie: &[TrieNode], row: usize, byte: u8) -> (usize, u8) {
+    if !(TRIE_MIN_BYTE..=TRIE_MAX_BYTE).contains(&byte) {
         return (0, 255);
     }
-    if CODEBOOK_TRIE[row].0[(char - 10) as usize] == 0 {
+    let next = trie[row].0[(byte - TRIE_MIN_BYTE) as usize];
+    if next == 0 {
         (0, 255)
-    } else if CODEBOOK_TRIE[row].0[(char - 10) as usize] & 0x8000 != 0 {
-        (0, (CODEBOOK_TRIE[row].0[(char - 10) as usize] & 0x00ff) as u8)
+    } else if next & TRIE_TERMINAL != 0 {
+        (0, (next & 0x00ff) as u8)
     } else {
-        let row = CODEBOOK_TRIE[row].0[(char - 10) as usize] as usize;
-        (row, CODEBOOK_TRIE[row].1)
+        (next as usize, trie[next as usize].1)
     }
 }
 
-
 lazy_static! {
-    static ref CODEBOOK_MAP: HashMap<Vec<u8>, u8> = {
-        let mut map: HashMap<Vec<u8>, u8> = HashMap::new();
-        for (i, code) in CODEBOOK.iter().enumerate() {
-            map.insert(code.to_string().into_bytes(), i as u8);
-        }
-        map
-    };
-}
-
-lazy_static! {
-    static ref CODEBOOK_TRIE : Vec<([u16;113],u8)> = build_codebook_trie();
+    static ref CODEBOOK_TRIE: Vec<TrieNode> = build_codebook_trie();
 }
 
 /// The error type for decompress operation.
@@ -179,18 +181,15 @@ impl Error for DecompressError {}
 /// A specialized Result type for decompress operation.
 pub type Result<T> = result::Result<T, DecompressError>;
 
-fn flush_verbatim(verbatim: &[u8]) -> Vec<u8> {
-    let mut chunk: Vec<u8> = Vec::new();
+/// Write a run of up to 256 bytes that are not in the codebook.
+fn flush_verbatim(out: &mut Vec<u8>, verbatim: &[u8]) {
     if verbatim.len() > 1 {
-        chunk.push(255);
-        chunk.push((verbatim.len() - 1) as u8);
+        out.push(255);
+        out.push((verbatim.len() - 1) as u8);
     } else {
-        chunk.push(254);
+        out.push(254);
     }
-    for c in verbatim {
-        chunk.push(*c)
-    }
-    chunk
+    out.extend_from_slice(verbatim);
 }
 
 /// Returns compressed data as a vector of bytes.
@@ -205,22 +204,20 @@ fn flush_verbatim(verbatim: &[u8]) -> Vec<u8> {
 /// assert_eq!(vec![77, 114, 84], compressed);
 /// ```
 pub fn compress(input: &[u8]) -> Vec<u8> {
+    let trie: &[TrieNode] = &CODEBOOK_TRIE;
     let mut out: Vec<u8> = Vec::with_capacity(input.len() / 2);
-    let mut verbatim: Vec<u8> = Vec::new();
+    // Start of the current run of bytes that are not in the codebook
+    let mut verbatim_start = 0;
     let mut input_index = 0;
 
     while input_index < input.len() {
-        let mut encoded = false;
-        let mut max_len = 7;
-        if (input.len() - input_index) < 7 {
-            max_len = input.len() - input_index
-        }
+        let max_len = (input.len() - input_index).min(7);
 
         let mut row = 0;
         let mut best_i = 0;
         let mut best_code = 0;
         for b in 0..max_len {
-            let (new_row, code) = codebook_trie_next_char(row, input[input_index + b]);
+            let (new_row, code) = codebook_trie_next_char(trie, row, input[input_index + b]);
             if code != 255 {
                 best_i = b + 1;
                 best_code = code;
@@ -230,29 +227,25 @@ pub fn compress(input: &[u8]) -> Vec<u8> {
                 break;
             }
         }
+
         if best_i > 0 {
-            if !verbatim.is_empty() {
-                out.append(&mut flush_verbatim(&verbatim));
-                verbatim.clear();
+            if verbatim_start < input_index {
+                flush_verbatim(&mut out, &input[verbatim_start..input_index]);
             }
             out.push(best_code);
             input_index += best_i;
-            encoded = true;
-        }
-
-        if !encoded {
-            verbatim.push(input[input_index]);
+            verbatim_start = input_index;
+        } else {
             input_index += 1;
-
-            if verbatim.len() == 256 {
-                out.append(&mut flush_verbatim(&verbatim));
-                verbatim.clear();
+            if input_index - verbatim_start == 256 {
+                flush_verbatim(&mut out, &input[verbatim_start..input_index]);
+                verbatim_start = input_index;
             }
         }
     }
 
-    if !verbatim.is_empty() {
-        out.append(&mut flush_verbatim(&verbatim));
+    if verbatim_start < input_index {
+        flush_verbatim(&mut out, &input[verbatim_start..input_index]);
     }
     out
 }
@@ -287,7 +280,7 @@ pub fn decompress(input: &[u8]) -> Result<Vec<u8>> {
             out.push(input[i + 1]);
             i += 2;
         } else if input[i] == 255 {
-            if i + 1 >= input.len() || i + 2 + input[i + 1] as usize >= input.len() {
+            if i + 2 + input[i + 1] as usize > input.len() {
                 return Err(DecompressError);
             }
             for j in 0..=input[i + 1] {
@@ -348,17 +341,17 @@ mod tests {
         }
     }
 
-    fn codebook_map_get(s : &str) -> Option<u8> {
+    fn codebook_trie_get(s: &str) -> Option<u8> {
         let mut row = 0;
         let s = s.as_bytes();
-        for b in 0..(s.len() - 1) {
-            let (new_row, _) = codebook_trie_next_char(row, s[b]);
+        for &b in &s[..s.len() - 1] {
+            let (new_row, _) = codebook_trie_next_char(&CODEBOOK_TRIE, row, b);
             if new_row == 0 {
                 return None;
             }
             row = new_row;
         }
-        let (_, new_code) = codebook_trie_next_char(row, s[s.len() - 1]);
+        let (_, new_code) = codebook_trie_next_char(&CODEBOOK_TRIE, row, s[s.len() - 1]);
         if new_code == 255 {
             None
         } else {
@@ -367,11 +360,10 @@ mod tests {
     }
 
     #[test]
-    fn test_codebook_map_get() {
-        for i in 0..254 {
-            assert_eq!(Some(i as u8), codebook_map_get(CODEBOOK[i]));
+    fn test_codebook_trie_get() {
+        for (i, entry) in CODEBOOK.iter().enumerate() {
+            assert_eq!(Some(i as u8), codebook_trie_get(entry));
         }
-        assert_eq!(None, codebook_map_get("foobar"));
+        assert_eq!(None, codebook_trie_get("foobar"));
     }
-
 }
