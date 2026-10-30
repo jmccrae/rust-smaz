@@ -273,26 +273,24 @@ pub fn decompress(input: &[u8]) -> Result<Vec<u8>> {
     let mut i: usize = 0;
 
     while i < input.len() {
-        if input[i] == 254 {
-            if i + 1 >= input.len() {
-                return Err(DecompressError);
+        match input[i] {
+            254 => {
+                out.push(*input.get(i + 1).ok_or(DecompressError)?);
+                i += 2;
             }
-            out.push(input[i + 1]);
-            i += 2;
-        } else if input[i] == 255 {
-            if i + 2 + input[i + 1] as usize > input.len() {
-                return Err(DecompressError);
+            255 => {
+                let len = *input.get(i + 1).ok_or(DecompressError)? as usize + 1;
+                out.extend_from_slice(input.get(i + 2..i + 2 + len).ok_or(DecompressError)?);
+                i += 2 + len;
             }
-            for j in 0..=input[i + 1] {
-                out.push(input[i + 2 + j as usize])
+            code => {
+                // Entries are at most 7 bytes, where pushing is faster than
+                // extend_from_slice
+                for &c in CODEBOOK[code as usize].as_bytes() {
+                    out.push(c);
+                }
+                i += 1;
             }
-            i += 3 + input[i + 1] as usize
-        } else {
-            for c in CODEBOOK[input[i] as usize].as_bytes().iter() {
-                out.push(*c);
-            }
-
-            i += 1;
         }
     }
     Ok(out)
