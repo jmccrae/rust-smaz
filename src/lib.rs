@@ -1,9 +1,10 @@
 //! This crate implements the smaz algorithm for compressing very short strings.
 //!
-//! Smaz instead is not good for compressing general purpose data, but can compress
-//! text by 40-50% in the average case (works better with English), and is able to
-//! perform a bit of compression for HTML and urls as well. The important point is
-//! that Smaz is able to compress even strings of two or three bytes!
+//! Smaz instead is not good for compressing general purpose data, but can
+//! compress text by 40-50% in the average case (works better with English), and
+//! is able to perform a bit of compression for HTML and urls as well. The
+//! important point is that Smaz is able to compress even strings of two or
+//! three bytes!
 //!
 //! See original [library by antirez](http://github.com/antirez/smaz) for information on smaz and the algorithm itself.
 //!
@@ -36,11 +37,13 @@
 //! - `the end` compressed by 58%
 //! - `not-a-g00d-Exampl333` *enlarged* by 15%
 //! - `Smaz is a simple compression library` compressed by 39%
-//! - `Nothing is more difficult, and therefore more precious, than to be able to decide` compressed by 49%
+//! - `Nothing is more difficult, and therefore more precious, than to be able
+//!   to decide` compressed by 49%
 //! - `this is an example of what works very well with smaz` compressed by 49%
 //! - `1000 numbers 2000 will 10 20 30 compress very little` compressed by 10%
 //! - `and now a few italian sentences:` compressed by 41%
-//! - `Nel mezzo del cammin di nostra vita, mi ritrovai in una selva oscura` compressed by 33%
+//! - `Nel mezzo del cammin di nostra vita, mi ritrovai in una selva oscura`
+//!   compressed by 33%
 //! - `Mi illumino di immenso` compressed by 37%
 //! - `L'autore di questa libreria vive in Sicilia` compressed by 28%
 //! - `try it against urls` compressed by 37%
@@ -171,11 +174,7 @@ impl fmt::Display for DecompressError {
     }
 }
 
-impl Error for DecompressError {
-    fn description(&self) -> &str {
-        "invalid compressed data"
-    }
-}
+impl Error for DecompressError {}
 
 /// A specialized Result type for decompress operation.
 pub type Result<T> = result::Result<T, DecompressError>;
@@ -288,7 +287,7 @@ pub fn decompress(input: &[u8]) -> Result<Vec<u8>> {
             out.push(input[i + 1]);
             i += 2;
         } else if input[i] == 255 {
-            if i + 1 >= input.len() || i + input[i + 1] as usize + 2 >= input.len() {
+            if i + 1 >= input.len() || i + 2 + input[i + 1] as usize >= input.len() {
                 return Err(DecompressError);
             }
             for j in 0..=input[i + 1] {
@@ -342,7 +341,7 @@ mod tests {
             }
 
             if !s.is_empty() {
-                let level = 100i8 - ((100 * compressed.len()) / s.as_bytes().len()) as i8;
+                let level = 100i8 - ((100 * compressed.len()) / s.len()) as i8;
                 let word = if level > 0 { "compressed" } else { "enlarged" };
                 println!("\"{}\" {} by {}%", s, word, level.abs());
             }
