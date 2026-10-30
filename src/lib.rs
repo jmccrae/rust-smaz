@@ -181,18 +181,15 @@ impl Error for DecompressError {}
 /// A specialized Result type for decompress operation.
 pub type Result<T> = result::Result<T, DecompressError>;
 
-fn flush_verbatim(verbatim: &[u8]) -> Vec<u8> {
-    let mut chunk: Vec<u8> = Vec::new();
+/// Write a run of up to 256 bytes that are not in the codebook.
+fn flush_verbatim(out: &mut Vec<u8>, verbatim: &[u8]) {
     if verbatim.len() > 1 {
-        chunk.push(255);
-        chunk.push((verbatim.len() - 1) as u8);
+        out.push(255);
+        out.push((verbatim.len() - 1) as u8);
     } else {
-        chunk.push(254);
+        out.push(254);
     }
-    for c in verbatim {
-        chunk.push(*c)
-    }
-    chunk
+    out.extend_from_slice(verbatim);
 }
 
 /// Returns compressed data as a vector of bytes.
@@ -209,15 +206,12 @@ fn flush_verbatim(verbatim: &[u8]) -> Vec<u8> {
 pub fn compress(input: &[u8]) -> Vec<u8> {
     let trie: &[TrieNode] = &CODEBOOK_TRIE;
     let mut out: Vec<u8> = Vec::with_capacity(input.len() / 2);
-    let mut verbatim: Vec<u8> = Vec::new();
+    // Start of the current run of bytes that are not in the codebook
+    let mut verbatim_start = 0;
     let mut input_index = 0;
 
     while input_index < input.len() {
-        let mut encoded = false;
-        let mut max_len = 7;
-        if (input.len() - input_index) < 7 {
-            max_len = input.len() - input_index
-        }
+        let max_len = (input.len() - input_index).min(7);
 
         let mut row = 0;
         let mut best_i = 0;
@@ -233,29 +227,25 @@ pub fn compress(input: &[u8]) -> Vec<u8> {
                 break;
             }
         }
+
         if best_i > 0 {
-            if !verbatim.is_empty() {
-                out.append(&mut flush_verbatim(&verbatim));
-                verbatim.clear();
+            if verbatim_start < input_index {
+                flush_verbatim(&mut out, &input[verbatim_start..input_index]);
             }
             out.push(best_code);
             input_index += best_i;
-            encoded = true;
-        }
-
-        if !encoded {
-            verbatim.push(input[input_index]);
+            verbatim_start = input_index;
+        } else {
             input_index += 1;
-
-            if verbatim.len() == 256 {
-                out.append(&mut flush_verbatim(&verbatim));
-                verbatim.clear();
+            if input_index - verbatim_start == 256 {
+                flush_verbatim(&mut out, &input[verbatim_start..input_index]);
+                verbatim_start = input_index;
             }
         }
     }
 
-    if !verbatim.is_empty() {
-        out.append(&mut flush_verbatim(&verbatim));
+    if verbatim_start < input_index {
+        flush_verbatim(&mut out, &input[verbatim_start..input_index]);
     }
     out
 }
